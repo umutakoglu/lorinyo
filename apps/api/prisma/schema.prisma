@@ -1,0 +1,461 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// USER & AUTHENTICATION
+// ============================================================================
+
+enum Role {
+  ADMIN
+  VENDOR
+  CUSTOMER
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  firstName String?
+  lastName  String?
+  role      Role     @default(CUSTOMER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  vendorCredentials VendorCredentials[]
+  auditLogs         AuditLog[]
+  orders            Order[]
+
+  @@index([email])
+}
+
+model VendorCredentials {
+  id                String   @id @default(uuid())
+  userId            String
+  platform          Platform
+  apiKey            String // Encrypted
+  apiSecret         String? // Encrypted
+  supplierId        String? // For Trendyol
+  merchantId        String? // For other platforms
+  isActive          Boolean  @default(true)
+  lastSyncAt        DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, platform])
+  @@index([userId])
+}
+
+// ============================================================================
+// PRODUCT MANAGEMENT (PIM)
+// ============================================================================
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  parentId    String?
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  parent            Category?          @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children          Category[]         @relation("CategoryHierarchy")
+  products          Product[]
+  categoryMappings  CategoryMapping[]
+
+  @@index([slug])
+  @@index([parentId])
+}
+
+model CategoryMapping {
+  id                 String   @id @default(uuid())
+  localCategoryId    String
+  platform           Platform
+  platformCategoryId String
+  platformCategory   String // Category name/path in marketplace
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  localCategory Category @relation(fields: [localCategoryId], references: [id], onDelete: Cascade)
+
+  @@unique([localCategoryId, platform])
+  @@index([localCategoryId])
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  categoryId  String?
+  brand       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants Variant[]
+
+  @@index([slug])
+  @@index([categoryId])
+}
+
+model Variant {
+  id          String   @id @default(uuid())
+  productId   String
+  sku         String   @unique
+  barcode     String?
+  stock       Int      @default(0)
+  price       Decimal  @db.Decimal(10, 2)
+  compareAtPrice Decimal? @db.Decimal(10, 2)
+  costPrice   Decimal? @db.Decimal(10, 2)
+  weight      Decimal? @db.Decimal(10, 2) // in kg
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  product           Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  attributes        VariantAttribute[]
+  images            VariantImage[]
+  marketplaceSyncs  MarketplaceSync[]
+  orderItems        OrderItem[]
+
+  @@index([sku])
+  @@index([productId])
+  @@index([barcode])
+}
+
+model VariantAttribute {
+  id        String   @id @default(uuid())
+  variantId String
+  key       String // e.g., "color", "size", "material"
+  value     String // e.g., "Red", "XL", "Cotton"
+  createdAt DateTime @default(now())
+
+  // Relations
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, key])
+  @@index([variantId])
+}
+
+model VariantImage {
+  id        String   @id @default(uuid())
+  variantId String
+  url       String
+  alt       String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  // Relations
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([variantId])
+}
+
+// ============================================================================
+// MARKETPLACE INTEGRATION
+// ============================================================================
+
+enum Platform {
+  LOCAL // Own e-commerce site
+  TRENDYOL
+  HEPSIBURADA
+  N11
+  AMAZON
+}
+
+enum SyncStatus {
+  PENDING
+  IN_PROGRESS
+  SYNCED
+  ERROR
+  DISABLED
+}
+
+model MarketplaceSync {
+  id               String     @id @default(uuid())
+  variantId        String
+  platform         Platform
+  platformProductId String? // ID in marketplace
+  platformSku      String? // SKU in marketplace
+  status           SyncStatus @default(PENDING)
+  lastSyncAt       DateTime?
+  lastErrorMessage String?
+  syncAttempts     Int        @default(0)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  // Relations
+  variant Variant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  syncLogs SyncLog[]
+
+  @@unique([variantId, platform])
+  @@index([variantId])
+  @@index([platform, status])
+}
+
+model SyncLog {
+  id                  String   @id @default(uuid())
+  marketplaceSyncId   String
+  action              String // "PUSH_PRODUCT", "UPDATE_STOCK", "UPDATE_PRICE"
+  status              String // "SUCCESS", "ERROR"
+  requestPayload      Json?
+  responsePayload     Json?
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+
+  // Relations
+  marketplaceSync MarketplaceSync @relation(fields: [marketplaceSyncId], references: [id], onDelete: Cascade)
+
+  @@index([marketplaceSyncId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// ORDER MANAGEMENT (OMS)
+// ============================================================================
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Order {
+  id                String        @id @default(uuid())
+  orderNumber       String        @unique
+  platform          Platform      @default(LOCAL)
+  platformOrderId   String? // Order ID from marketplace
+  userId            String?
+  customerName      String
+  customerEmail     String
+  customerPhone     String
+  status            OrderStatus   @default(PENDING)
+  paymentStatus     PaymentStatus @default(PENDING)
+  subtotal          Decimal       @db.Decimal(10, 2)
+  shippingCost      Decimal       @db.Decimal(10, 2)
+  tax               Decimal       @db.Decimal(10, 2)
+  total             Decimal       @db.Decimal(10, 2)
+  currency          String        @default("TRY")
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Relations
+  user              User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items             OrderItem[]
+  shippingAddress   ShippingAddress?
+  statusHistory     OrderStatusHistory[]
+  shipments         Shipment[]
+
+  @@index([orderNumber])
+  @@index([platform, platformOrderId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  variantId String
+  sku       String
+  name      String
+  quantity  Int
+  price     Decimal  @db.Decimal(10, 2)
+  total     Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  // Relations
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([variantId])
+}
+
+model ShippingAddress {
+  id          String   @id @default(uuid())
+  orderId     String   @unique
+  fullName    String
+  phone       String
+  address     String
+  district    String
+  city        String
+  country     String   @default("Turkey")
+  postalCode  String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(uuid())
+  orderId   String
+  status    OrderStatus
+  note      String?
+  createdAt DateTime    @default(now())
+
+  // Relations
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// CARGO INTEGRATION
+// ============================================================================
+
+enum CargoProvider {
+  YURTICI
+  ARAS
+  MNG
+  PTT
+}
+
+enum ShipmentStatus {
+  PENDING
+  LABEL_CREATED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+model Shipment {
+  id              String         @id @default(uuid())
+  orderId         String
+  provider        CargoProvider
+  trackingCode    String         @unique
+  labelUrl        String? // URL to generated label (PDF/ZPL)
+  status          ShipmentStatus @default(PENDING)
+  estimatedDelivery DateTime?
+  actualDelivery  DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Relations
+  order           Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  trackingEvents  ShipmentTracking[]
+
+  @@index([orderId])
+  @@index([trackingCode])
+  @@index([provider])
+}
+
+model ShipmentTracking {
+  id          String   @id @default(uuid())
+  shipmentId  String
+  status      String
+  location    String?
+  description String
+  eventTime   DateTime
+  createdAt   DateTime @default(now())
+
+  // Relations
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId])
+  @@index([eventTime])
+}
+
+// ============================================================================
+// BULK OPERATIONS
+// ============================================================================
+
+enum BulkOperationType {
+  PRODUCT_IMPORT
+  STOCK_UPDATE
+  PRICE_UPDATE
+  MARKETPLACE_SYNC
+}
+
+enum BulkOperationStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  PARTIALLY_COMPLETED
+}
+
+model BulkOperation {
+  id            String               @id @default(uuid())
+  userId        String
+  type          BulkOperationType
+  status        BulkOperationStatus  @default(QUEUED)
+  totalItems    Int
+  processedItems Int                 @default(0)
+  successItems  Int                  @default(0)
+  failedItems   Int                  @default(0)
+  errors        Json? // Array of error details
+  fileUrl       String? // Original uploaded file
+  resultUrl     String? // Result file with errors
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// AUDIT LOGGING
+// ============================================================================
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String
+  action    String // "PRODUCT_UPDATE", "ORDER_SHIP", "USER_LOGIN", etc.
+  entity    String // "Product", "Order", "User", etc.
+  entityId  String
+  oldValue  Json? // Previous state
+  newValue  Json? // New state
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
