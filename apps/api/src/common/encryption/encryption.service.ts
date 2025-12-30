@@ -7,7 +7,7 @@ export class EncryptionService {
     private readonly encryptionKey: string;
 
     constructor(private configService: ConfigService) {
-        this.encryptionKey = this.configService.get('ENCRYPTION_KEY');
+        this.encryptionKey = this.configService.get('ENCRYPTION_KEY') || '';
 
         if (!this.encryptionKey || this.encryptionKey.length < 32) {
             throw new Error('ENCRYPTION_KEY must be at least 32 characters');

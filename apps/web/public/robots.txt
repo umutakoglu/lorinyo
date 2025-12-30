@@ -1,0 +1,18 @@
+# User-agent: *
+# Allow all bots to crawl the site
+
+User-agent: *
+Allow: /
+
+# Disallow admin and private areas
+Disallow: /admin/
+Disallow: /api/
+Disallow: /checkout/
+Disallow: /cart/
+
+# Allow search engines to access product pages
+Allow: /shop/
+Allow: /shop/kategori/
+
+# Sitemap location
+Sitemap: https://lorinyo.com/sitemap.xml
